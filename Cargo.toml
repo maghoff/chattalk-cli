@@ -1,0 +1,7 @@
+[package]
+authors = ["mag"]
+name = "chattalk-cli"
+version = "0.1.0"
+
+[dependencies]
+plaintalk = "0.0.15"
