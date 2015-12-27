@@ -1,33 +1,15 @@
 extern crate plaintalk;
 
-use std::convert;
+mod err;
+
 use std::io::{Read, Write, BufReader, BufWriter};
 use std::process;
 use plaintalk::{pullparser, pushgenerator};
 
-#[derive(Debug)]
-enum Error {
+err!{ Error;
 	PlainTalk(&'static str),
 	PullParser(pullparser::Error),
-	PushGenerator(pushgenerator::Error),
-}
-
-impl convert::From<&'static str> for Error {
-	fn from(err: &'static str) -> Error {
-		Error::PlainTalk(err)
-	}
-}
-
-impl convert::From<pullparser::Error> for Error {
-	fn from(err: pullparser::Error) -> Error {
-		Error::PullParser(err)
-	}
-}
-
-impl convert::From<pushgenerator::Error> for Error {
-	fn from(err: pushgenerator::Error) -> Error {
-		Error::PushGenerator(err)
-	}
+	PushGenerator(pushgenerator::Error)
 }
 
 fn connection<R: Read, W: Write>(read: R, write: W) -> Result<(), Error> {
