@@ -2,6 +2,7 @@
 name = "chattalk-cli"
 version = "0.1.0"
 dependencies = [
+ "crossbeam 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "plaintalk 0.0.15 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -13,6 +14,11 @@ dependencies = [
  "winapi 0.2.5 (registry+https://github.com/rust-lang/crates.io-index)",
  "winapi-build 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "crossbeam"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "libc"

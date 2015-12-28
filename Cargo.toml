@@ -4,4 +4,5 @@ name = "chattalk-cli"
 version = "0.1.0"
 
 [dependencies]
+crossbeam = "0.2.0"
 plaintalk = "0.0.15"
