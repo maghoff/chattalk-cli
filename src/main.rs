@@ -1,10 +1,13 @@
+#![feature(mpsc_select)]
+
 extern crate crossbeam;
 extern crate plaintalk;
 
 mod err;
 
 use std::convert;
-use std::io::{Read, Write, BufReader, BufWriter};
+use std::io::{self, BufReader, BufWriter};
+use std::io::prelude::*;
 use std::process;
 use std::sync::mpsc::{self, Sender, SendError};
 use plaintalk::{pullparser, pushgenerator};
@@ -46,11 +49,8 @@ fn expect_field(message: &mut pullparser::Message, expected: &'static [u8]) -> R
 	}
 }
 
-fn connection<R: Read, W: Write>(read: R, write: W, tx: Sender<ProtocolEvent>) -> Result<(), Error> {
+fn connection<R: Read>(read: R, tx: Sender<ProtocolEvent>) -> Result<(), Error> {
 	let mut parser = pullparser::PullParser::new(BufReader::new(read));
-	let mut generator = pushgenerator::PushGenerator::new(BufWriter::new(write));
-
-	try!(generator.write_message(&[b"-", b"auth", b"unix"]));
 
 	let mut msg_id_buf = [0u8; 10];
 	let mut event_buf = [0u8; 10];
@@ -84,38 +84,56 @@ fn connection<R: Read, W: Write>(read: R, write: W, tx: Sender<ProtocolEvent>) -
 }
 
 fn main() {
-	let (tx, rx) = mpsc::channel();
+	let mut subprocess = process::Command::new("ssh")
+		.args(&["trau.me", "nc -U /var/run/chattalk/socket"])
+		.stdin(process::Stdio::piped())
+		.stdout(process::Stdio::piped())
+		.stderr(process::Stdio::null())
+		.spawn().unwrap();
+
+	let read = subprocess.stdout.as_mut().unwrap().by_ref();
+	let write = subprocess.stdin.as_mut().unwrap().by_ref();
+	let mut generator = pushgenerator::PushGenerator::new(BufWriter::new(write));
+	generator.write_message(&[b"-", b"auth", b"unix"]).unwrap();
 
 	let result = crossbeam::scope(move |scope| {
-		let subprocess = scope.spawn(move || {
-			let mut subprocess = process::Command::new("ssh")
-				.args(&["trau.me", "nc -U /var/run/chattalk/socket"])
-				.stdin(process::Stdio::piped())
-				.stdout(process::Stdio::piped())
-				.stderr(process::Stdio::null())
-				.spawn().unwrap();
-
-			connection(
-				subprocess.stdout.as_mut().unwrap().by_ref(),
-				subprocess.stdin.as_mut().unwrap().by_ref(),
-				tx
-			).unwrap();
-
-			subprocess.wait().unwrap().code()
+		let (tx_net, rx_net) = mpsc::channel();
+		let subprocess_thread = scope.spawn(move || {
+			connection(read, tx_net).unwrap();
+// 			subprocess.wait().unwrap().code()
+			Some(1)
 		});
 
-		while let Ok(message) = rx.recv() {
-			match message {
-				ProtocolEvent::Authenticated(id) => {
-					println!("Authenticated as {}", id);
+		let (tx_in, rx_in) = mpsc::channel();
+		let input = scope.spawn(move || {
+			let stdin = io::stdin();
+			for line in stdin.lock().lines() {
+				tx_in.send(line.unwrap()).unwrap();
+			}
+		});
+
+		loop {
+			select! {
+				msg = rx_net.recv() => match msg {
+					Ok(ProtocolEvent::Authenticated(id)) => {
+						println!("Authenticated as {}", id);
+					},
+					Ok(ProtocolEvent::Shout(id, msg)) => {
+						println!("{: >10}: {}", id, msg);
+					},
+					Err(_) => break
 				},
-				ProtocolEvent::Shout(id, msg) => {
-					println!("{: >10}: {}", id, msg);
-				},
+				line = rx_in.recv() => match line {
+					Ok(line) => generator.write_message(&[b"!", b"shout", &line.into_bytes()]).unwrap(),
+					Err(_) => break
+				}
 			}
 		}
 
-		subprocess.join()
+		println!("Broke out of core loop (maybe hit ^C?)");
+
+		let _ = input.join();
+		subprocess_thread.join()
 	});
 
 	process::exit(result.unwrap_or(1))
