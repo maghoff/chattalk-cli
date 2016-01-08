@@ -1,5 +1,3 @@
-#![feature(mpsc_select)]
-
 extern crate crossbeam;
 extern crate plaintalk;
 
@@ -17,12 +15,17 @@ err!{ Error;
 	PullParser(pullparser::Error),
 	PushGenerator(pushgenerator::Error),
 	ExpectationFailed(()),
-	Sender(SendError<ProtocolEvent>)
+	Sender(SendError<Message>)
 }
 
 enum ProtocolEvent {
 	Authenticated(String),
 	Shout(String, String),
+}
+
+enum Message {
+	ProtocolEvent(ProtocolEvent),
+	Line(String),
 }
 
 fn expect<T, E>(field: Result<Option<T>, E>) -> Result<T, Error>
@@ -49,7 +52,7 @@ fn expect_field(message: &mut pullparser::Message, expected: &'static [u8]) -> R
 	}
 }
 
-fn connection<R: Read>(read: R, tx: Sender<ProtocolEvent>) -> Result<(), Error> {
+fn connection<R: Read>(read: R, tx: Sender<Message>) -> Result<(), Error> {
 	let mut parser = pullparser::PullParser::new(BufReader::new(read));
 
 	let mut msg_id_buf = [0u8; 10];
@@ -66,14 +69,14 @@ fn connection<R: Read>(read: R, tx: Sender<ProtocolEvent>) -> Result<(), Error> 
 					let id = try!{expect(message.read_field_as_string())};
 					let msg = try!{expect(message.read_field_as_string())};
 					try!{expect_end(&mut message)};
-					try!{tx.send(ProtocolEvent::Shout(id, msg))};
+					try!{tx.send(Message::ProtocolEvent(ProtocolEvent::Shout(id, msg)))};
 				}
 				_ => try!{message.ignore_rest()}
 			}
 		} else if msg_id == b"-" {
 			try!{expect_field(&mut message, b"ok")};
 			let id = try!{expect(message.read_field_as_string())};
-			try!{tx.send(ProtocolEvent::Authenticated(id))};
+			try!{tx.send(Message::ProtocolEvent(ProtocolEvent::Authenticated(id)))};
 			try!{message.ignore_rest()};
 		} else {
 			try!{message.ignore_rest()};
@@ -97,36 +100,34 @@ fn main() {
 	generator.write_message(&[b"-", b"auth", b"unix"]).unwrap();
 
 	let result = crossbeam::scope(move |scope| {
-		let (tx_net, rx_net) = mpsc::channel();
+		let (tx, rx) = mpsc::channel();
+
+		let tx_net = tx.clone();
 		let subprocess_thread = scope.spawn(move || {
 			connection(read, tx_net).unwrap();
 // 			subprocess.wait().unwrap().code()
 			Some(1)
 		});
 
-		let (tx_in, rx_in) = mpsc::channel();
+		let tx_in = tx;
 		let input = scope.spawn(move || {
 			let stdin = io::stdin();
 			for line in stdin.lock().lines() {
-				tx_in.send(line.unwrap()).unwrap();
+				tx_in.send(Message::Line(line.unwrap())).unwrap();
 			}
 		});
 
-		loop {
-			select! {
-				msg = rx_net.recv() => match msg {
-					Ok(ProtocolEvent::Authenticated(id)) => {
-						println!("Authenticated as {}", id);
-					},
-					Ok(ProtocolEvent::Shout(id, msg)) => {
-						println!("{: >10}: {}", id, msg);
-					},
-					Err(_) => break
+		while let Ok(msg) = rx.recv() {
+			match msg {
+				Message::ProtocolEvent(ProtocolEvent::Authenticated(id)) => {
+					println!("Authenticated as {}", id);
 				},
-				line = rx_in.recv() => match line {
-					Ok(line) => generator.write_message(&[b"!", b"shout", &line.into_bytes()]).unwrap(),
-					Err(_) => break
-				}
+				Message::ProtocolEvent(ProtocolEvent::Shout(id, msg)) => {
+					println!("\r{: >10}: {}", id, msg);
+				},
+				Message::Line(line) => {
+					generator.write_message(&[b"!", b"shout", &line.into_bytes()]).unwrap();
+				},
 			}
 		}
 
