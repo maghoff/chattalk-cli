@@ -26,6 +26,7 @@ enum ProtocolEvent {
 enum Message {
 	ProtocolEvent(ProtocolEvent),
 	Line(String),
+	Terminate,
 }
 
 fn expect<T, E>(field: Result<Option<T>, E>) -> Result<T, Error>
@@ -104,7 +105,8 @@ fn main() {
 
 		let tx_net = tx.clone();
 		let subprocess_thread = scope.spawn(move || {
-			connection(read, tx_net).unwrap();
+			connection(read, tx_net.clone()).unwrap();
+			tx_net.send(Message::Terminate).unwrap();
 // 			subprocess.wait().unwrap().code()
 			Some(1)
 		});
@@ -115,6 +117,7 @@ fn main() {
 			for line in stdin.lock().lines() {
 				tx_in.send(Message::Line(line.unwrap())).unwrap();
 			}
+			tx_in.send(Message::Terminate).unwrap();
 		});
 
 		while let Ok(msg) = rx.recv() {
@@ -128,6 +131,7 @@ fn main() {
 				Message::Line(line) => {
 					generator.write_message(&[b"!", b"shout", &line.into_bytes()]).unwrap();
 				},
+				Message::Terminate => break
 			}
 		}
 
